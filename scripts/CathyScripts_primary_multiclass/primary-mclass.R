@@ -32,7 +32,7 @@ cat("Multiclass labels:", paste(levels(claims_clean$mclass), collapse = ", "), "
 if (!dir.exists("data")) dir.create("data", recursive = TRUE)
 save(claims_clean, file = "data/claims-clean-mclass.RData")
 
-# 2. Build TF–IDF features for training
+# Build TF–IDF features for training
 
 it_train <- itoken(
   claims_clean$text_clean,
