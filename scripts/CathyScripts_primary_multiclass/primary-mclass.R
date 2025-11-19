@@ -1,48 +1,38 @@
-## scripts/primary-mclass.R
-## Train a primary MULTICLASS glmnet model and generate predictions on claims-test.RData
+## Train a primary multiclass glmnet model and generate predictions
 
 library(tidyverse)
 library(text2vec)
 library(glmnet)
 library(tidymodels)
 
-#------------------------------------------------------------
-# 0. Source preprocessing functions (your HTML -> text pipeline)
-#------------------------------------------------------------
-
 source("scripts/preprocessing.R")
-# parse_data() expects a column `text_tmp` with HTML and produces `text_clean`
 
-set.seed(110122)  # for reproducibility
+set.seed(110122)
 
-# output directory for this multiclass try
-out_dir <- "results/mclass-results-try"
+# output directory
+out_dir <- "results/mclass_results"
 
 # make sure folders exist
 if (!dir.exists("results")) dir.create("results", recursive = TRUE)
 if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
 
-#------------------------------------------------------------
-# 1. Load raw labeled training data and preprocess
-#------------------------------------------------------------
+# Load raw labeled training data and preprocess
 
-load("data/claims-raw.RData")   # should create `claims_raw`
+load("data/claims-raw.RData") 
 
 claims_clean <- claims_raw %>%
-  parse_data() %>%                    # uses your parse_fn internally
+  parse_data() %>%                    
   select(.id, text_clean, mclass) %>%
   mutate(mclass = factor(mclass))
 
 cat("Training size:", nrow(claims_clean), "pages\n")
 cat("Multiclass labels:", paste(levels(claims_clean$mclass), collapse = ", "), "\n")
 
-# Optionally save cleaned training data (still in data/)
+# Optionally save cleaned training data
 if (!dir.exists("data")) dir.create("data", recursive = TRUE)
 save(claims_clean, file = "data/claims-clean-mclass.RData")
 
-#------------------------------------------------------------
-# 2. Build TF–IDF features for training (unigrams + bigrams)
-#------------------------------------------------------------
+# Build TF–IDF features for training
 
 it_train <- itoken(
   claims_clean$text_clean,
@@ -55,7 +45,7 @@ vocab <- create_vocabulary(
   ngram = c(1L, 2L)        # unigrams + bigrams
 ) %>%
   prune_vocabulary(
-    term_count_min = 5L    # drop rare terms
+    term_count_min = 5L
   )
 
 vectorizer <- vocab_vectorizer(vocab)
@@ -68,9 +58,7 @@ y_multi <- claims_clean$mclass
 
 cat("TF–IDF matrix:", dim(X_train)[1], "docs x", dim(X_train)[2], "terms\n")
 
-#------------------------------------------------------------
-# 3. Fit multinomial glmnet (primary multiclass model)
-#------------------------------------------------------------
+# Fit multinomial glmnet (primary multiclass model)
 
 cv_multi <- cv.glmnet(
   x            = X_train,
@@ -80,7 +68,7 @@ cv_multi <- cv.glmnet(
   nfolds       = 5
 )
 
-# Cross-validated in-sample accuracy (for reporting in writeup)
+# Cross-validated in-sample accuracy
 pred_multi_cv <- predict(
   cv_multi,
   X_train,
@@ -91,7 +79,7 @@ pred_multi_cv <- predict(
 acc_multi_cv <- mean(pred_multi_cv == y_multi)
 cat("Multiclass CV accuracy (lambda.min):", round(acc_multi_cv, 3), "\n")
 
-# Pack deployable objects (model + text pipeline)
+# Pack deployable objects
 mclass_model  <- cv_multi
 text_pipeline <- list(
   vocab      = vocab,
@@ -99,7 +87,7 @@ text_pipeline <- list(
   tfidf      = tfidf
 )
 
-# SAVE MODEL UNDER results/mclass-results-try
+# Save model
 save(
   mclass_model,
   text_pipeline,
@@ -109,14 +97,12 @@ save(
 cat("Saved multiclass model + text pipeline to", 
     file.path(out_dir, "mclass_primary_model.RData"), "\n")
 
-#------------------------------------------------------------
-# 4. Load TEST data, preprocess, and build TF–IDF features
-#------------------------------------------------------------
+# Load TEST data, preprocess, and build TF–IDF features
 
-load("data/claims-test.RData")   # should create `claims_test`
+load("data/claims-test.RData")
 
 clean_test <- claims_test %>%
-  parse_data() %>%               # same HTML -> text pipeline as training
+  parse_data() %>% 
   select(.id, text_clean)
 
 cat("Test size after parsing:", nrow(clean_test), "pages\n")
@@ -130,10 +116,7 @@ it_test <- itoken(
 dtm_test <- create_dtm(it_test, text_pipeline$vectorizer)
 X_test   <- text_pipeline$tfidf$transform(dtm_test)
 
-#------------------------------------------------------------
-# 5. Predict multiclass labels on test set
-#------------------------------------------------------------
-
+# Predict multiclass labels on test set
 mclass_pred <- predict(
   mclass_model,
   X_test,
@@ -141,17 +124,13 @@ mclass_pred <- predict(
   type = "class"
 )[, 1]
 
-#------------------------------------------------------------
-# 6. Construct pred_df with required columns and save
-#------------------------------------------------------------
-
+# Construct pred_df with required columns
 pred_df <- tibble(
   .id         = clean_test$.id,
-  bclass.pred = NA_character_,              # placeholder; fill later if you add a binary model
   mclass.pred = as.character(mclass_pred)
 )
 
-## 🔴 CHANGE groupN to your actual group number, e.g. preds-group5.RData
+## Change groupN to your actual group number
 save(pred_df, file = file.path(out_dir, "preds-groupN.RData"))
 
 cat("Saved predictions to", file.path(out_dir, "preds-groupN.RData"), "\n")
