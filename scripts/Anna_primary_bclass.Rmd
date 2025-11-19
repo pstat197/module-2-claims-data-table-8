@@ -1,0 +1,265 @@
+---
+title: "Anna_primary_bclass"
+author: "Anna Liang"
+date: "2025-11-16"
+output: pdf_document
+---
+
+# Develop predictive model for binary classfication.
+You can use any preprocessing and any modeling technique you like, including ones not discussed in class (consider exploring RNN or SVM). Export a deployable copy of each model and a set of predictions from each model on the test data claims-test.RData. Predictions should be formatted as a single data frame named pred_df with columns .id containing the URL ID, bclass.pred containing the predicted label for the binary class setting, mclass.pred containing the predicted label for the multiclass setting
+
+Unigram + Bigram TF–IDF + Regularized Logistic Regression (Binary Model)
+
+
+
+Load packages.
+```{r}
+library(tidyverse)
+library(text2vec)
+library(here)
+
+source(here("scripts/preprocessing.R"))
+set.seed(1234)
+```
+
+Load raw training data and clean
+```{r}
+load(here("data/claims-raw.RData")) # gives claims_raw
+
+claims_clean_binary <- claims_raw %>%
+  parse_data() %>%                     # adds text_clean column
+  select(.id, text_clean, bclass) %>%  
+  mutate(bclass = factor(bclass),
+         label_binary = ifelse(bclass == "Relevant claim content", 1L, 0L)) 
+
+# 1 = claims, 0 = everything else
+# columns: .id, text_clean, bclass, label_binary
+
+# number of rows
+nrow(claims_clean_binary)
+
+save(claims_clean_binary, file = here("data/claims-clean-binary.RData"))
+```
+
+Create TF–IDF features for binary training
+```{r}
+# Load cleaned training data
+load(here("data/claims-clean-binary.RData"))
+
+# Create text iterator
+it_train <- itoken(
+  claims_clean_binary$text_clean,
+  ids = claims_clean_binary$.id,
+  progressbar = FALSE
+)
+```
+
+Build vocabulary (unigrams + bigrams)
+```{r}
+vocab_bi <- create_vocabulary(
+  it_train,
+  ngram = c(1L, 2L)    # unigrams + bigrams
+)
+
+# Prune rare terms
+vocab_bi <- prune_vocabulary(
+  vocab_bi,
+  term_count_min = 5L # Remove terms that appear less than 5 times
+)
+
+# Vocabulary size
+nrow(vocab_bi) 
+```
+
+Create TF–IDF matrix
+```{r}
+vectorizer_bi <- vocab_vectorizer(vocab_bi)
+
+# document-term matrix (DTM)
+dtm_train_bi <- create_dtm(it_train, vectorizer_bi)
+
+# rows = documents (webpages)
+# columns = vocabulary terms (unigrams & bigrams)
+# entries = raw term counts per document
+
+# TF-IDF
+tfidf_bi <- TfIdf$new()
+
+X_train_bi <- tfidf_bi$fit_transform(dtm_train_bi) # Feature matrix
+y_train    <- claims_clean_binary$bclass
+
+# TF-IDF matrix dimensions
+cat("TF-IDF matrix:", dim(X_train_bi)[1], "documents", ",", dim(X_train_bi)[2], "terms\n")
+```
+
+
+Attempt 1: Fitting a SVM classifier w/ linear kernel was not possible due to the amount of features we have.
+Even after pruning to reduce the maximum number of vocabulary to 10000, running the model made rstudio crash.
+```{r}
+#vocab_bi <- prune_vocabulary(
+#  vocab_bi,
+#  term_count_min = 5L, # Remove terms that appear less than 5 times
+#  doc_proportion_max = 0.3, # Drop terms that appear in >30% of documents
+#  vocab_term_max = 10000L 
+# )
+
+#svm_bi <- svm(
+#  x = as.matrix(X_train_bi),
+#  y = claims_clean_binary$bclass, # factor labels
+#  kernel = "linear",
+#  probability = FALSE,
+#  scale = FALSE
+# )
+```
+
+Attempt 2: Regularized Logistic Regression (Glmnet) model
+
+```{r}
+library(glmnet)
+
+library(Matrix)
+
+X_glm <- as(X_train_bi, "dgCMatrix")
+y_train_bi <- as.numeric(claims_clean_binary$label_binary)
+
+# Cross validation
+bin_glmnet <- cv.glmnet(
+  x            = X_glm,
+  y            = y_train_bi,
+  family       = "binomial",
+  type.measure = "class",
+  nfolds       = 5
+)
+
+
+pred_glmnet <- predict(
+  bin_glmnet,
+  X_glm,
+  s    = "lambda.min",
+  type = "class"
+)[, 1]
+
+acc_glmnet <- mean(pred_glmnet == y_train_bi)
+cat("Training accuracy (glmnet):", round(acc_glmnet, 3), "\n")
+
+```
+
+
+```{r}
+# Save glmnet model
+model_bundle <- list(
+  glmnet_model = bin_glmnet,
+  vocabulary   = vocab_bi,
+  vectorizer   = vectorizer_bi,
+  tfidf_model  = tfidf_bi
+)
+
+# Save model and vectorizers
+save(model_bundle, file = here("results/bclass_primary_model.RData"))
+```
+
+#Applying this model to the test set
+
+```{r}
+# Load trained model
+load(here("results/bclass_primary_model.RData"))
+```
+
+
+Load test set and preprocess
+```{r}
+load(here("data/claims-test.RData"))
+
+claims_test_clean <- claims_test %>%
+  parse_data() %>%           
+  select(.id, text_clean)
+
+```
+
+Build TF–IDF for test set
+```{r}
+it_test <- itoken(
+  claims_test_clean$text_clean,
+  ids         = claims_test_clean$.id,
+  progressbar = FALSE
+)
+
+# Use the trained vectorizer (fixed vocabulary)
+dtm_test <- create_dtm(it_test, model_bundle$vectorizer)
+
+# Apply the trained TF–IDF transformer (same idf as training)
+X_test <- model_bundle$tfidf_model$transform(dtm_test)
+
+```
+
+Predict binary labels on test set
+```{r}
+# cv.glmnet: use s = "lambda.min"
+p_hat_test <- predict(
+  model_bundle$glmnet_model,
+  newx = X_test,
+  s    = "lambda.min",
+  type = "response"
+)[, 1]
+
+# 0/1 predictions with 0.5 cutoff
+pred_bin_test <- ifelse(p_hat_test > 0.5, 1L, 0L)
+
+# Map 0/1 → actual label strings
+bclass_pred <- ifelse(
+  pred_bin_test == 1L,
+  "Relevant claim content",
+  "N/A: No relevant content."
+)
+
+```
+
+Build prediction data frame
+```{r}
+pred_df_binary <- tibble(
+  .id         = claims_test_clean$.id,
+  bclass.pred = bclass_pred
+)
+```
+
+```{r}
+# Saving the binary predictions
+if (!dir.exists(here("results"))) dir.create(here("results"), recursive = TRUE)
+save(pred_df_binary, file = here("results/binaryclass_results/predictions.RData"))
+
+head(pred_df_binary)
+```
+
+
+Sensitivity, Specificity, and Accuracy.
+```{r}
+# Make sure both are plain 0/1 numeric
+truth <- as.numeric(y_train_bi)          # should already be 0/1
+pred  <- as.numeric(pred_glmnet)         # should be 0/1 from glmnet
+
+# Confusion matrix (0 = N/A, 1 = Relevant)
+cm <- table(
+  truth = factor(truth, levels = c(0, 1)),
+  pred  = factor(pred,  levels = c(0, 1))
+)
+cm
+
+# Extract cells
+TN <- cm["0", "0"]  # true negatives  (N/A predicted N/A)
+FP <- cm["0", "1"]  # false positives (N/A predicted Relevant)
+FN <- cm["1", "0"]  # false negatives (Relevant predicted N/A)
+TP <- cm["1", "1"]  # true positives  (Relevant predicted Relevant)
+
+# Metrics
+accuracy_cm  <- (TP + TN) / sum(cm)
+sensitivity  <- TP / (TP + FN)   # recall, TPR for "Relevant claim content"
+specificity  <- TN / (TN + FP)   # TNR for "N/A: No relevant content."
+
+cat("Accuracy from confusion matrix:", round(accuracy_cm, 3), "\n")
+cat("Sensitivity (TPR):", round(sensitivity, 3), "\n")
+cat("Specificity (TNR):", round(specificity, 3), "\n")
+
+cat("Accuracy from mean():", round(acc_glmnet, 3), "\n")
+cat("Accuracy from CM   :", round(accuracy_cm, 3), "\n")
+```
+

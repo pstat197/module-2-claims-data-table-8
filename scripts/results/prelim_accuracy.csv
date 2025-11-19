@@ -1,0 +1,4 @@
+setting,cv_accuracy
+Task1: paragraphs-only (words),0.782
+Task1: headers+paragraphs (words),0.6915
+Task2: stack(word log-odds + bigram PCs),0.588

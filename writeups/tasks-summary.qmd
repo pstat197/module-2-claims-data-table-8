@@ -1,25 +1,29 @@
 ---
 title: "Summary of exploratory tasks"
-author: 'YOUR NAMES HERE'
+author: 'Coraline Zhu, Josephine Kaminaga, Ben Hurt'
 date: today
 ---
 
 ### HTML scraping
 
-Does including header content improve predictions? Answer the question and provide quantitative evidence supporting your answer.
+We found that including header content does not improve predictions. We trained a PCA-enabled logistic regression model on only the paragraphs and it achieved 78.20% accuracy. However, the PCA-enabled logistic regression model with headers and paragraphs only achieved 69.15% accuracy.
 
 ### Bigrams
 
-Do bigrams capture additional information relevant to the classification of interest? Answer the question, **briefly** describe what analysis you conducted to arrive at your answer, and provide quantitative evidence supporting your answer.
+Bigrams do not capture additional information relevant to the classification of interest. To analyse whether bigrams did contribute to the classification task, we created a tf-idf matrix of the top 15,000 bigrams found in the claims text dataset and performed principle component analysis on this. Then, we input the paragraph-only PCA logistic regression model's predicted log-odds into another logistic regression model alongside the PCA of the top 15,000 bigrams. This was trained and its accuracy measured in the same way as the paragraph-only PCA logistic regression model. However, it only achieved 66.10% accuracy, which is less than the original logistic regression model trained in task 1.
 
 ### Neural net
 
-Summarize the neural network model you trained by desribing:
+For this task, we trained two neural networks using slightly different architectures to determine if there was any significant difference in performance between these architectures. One of the models was a recurrent neural network using long-short term memory (LSTM), while the other was a transformer model (as detailed in "Attention is All You Need"). The LSTM framework is known to be good for text processing due to its ability to capture and remember long-term dependencies in text, while the transformer model also performs very well in text processing thanks to multi-head attention.
 
--   architecture
+#### LSTM Model
 
--   optimization and loss
+The LSTM model takes in an input sequence of words (i.e. a cleaned news article) and outputs the probabilities of the article being irrelevant vs. relevant to a claim. The input sequence is converted to an embedding layer using nn.Embedding(), fed into a bidirectional LSTM layer using nn.LSTM(), then passed through a linear layer using nn.Linear(). This linear layer is activated using ReLU and finally pared down to an output size of 2 (representing the two possible classifications) with another nn.Linear() layer. The model was optimized using the ADaM optimizer with a learning rate of 0.001 and loss was calculated using cross entropy loss.
 
--   training epochs
+We trained the LSTM model for 20 epochs, with an initial embedding size of 128 neurons and a hidden layer size of 64 for the LSTM layer. Loss decreased steadily over the 20 epochs. Our predictive accuracy on a randomly generated test set was 76.40%, with 76% sensitiviy and 76% specificity as well.
 
--   predictive accuracy
+#### Transformer Model
+
+The transformer model takes an input sequence of words, passes it through an embedding and positional embedding layer for remembering the positions of words, and then passes it through two transformer blocks. Both transformer blocks implement 2-headed attention, layer normalization for stabilizing the model, and a feed-forward network. The output of the second transformer block is reduced dimensionally by passing it through GlobalAveragePooling1D, then neurons are randomly dropped at a rate of 0.1 to reduce overfitting. Finally, it is passed through a linear layer with ReLU activation and a sigmoid output classification layer.
+
+We trained the transformer model for 30 epochs with an embedding dimension of 64 and a feed-forward linear dimension of 128 neurons. We used the ADaM optimizer and binary cross entropy loss. This model achieved 77.34% accuracy, with 74% specificity and 82% sensitivity. 
