@@ -1,0 +1,230 @@
+---
+title: "preliminary task 1 and 2"
+author: "Coraline Zhu"
+date: "2025-11-17"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(tidytext)
+  library(Matrix)
+  library(xml2)
+  library(rvest)
+  library(irlba)
+  library(rlang)
+})
+
+set.seed(123)
+
+
+extract_text <- function(html_str, include_headers = TRUE) {
+  if (is.na(html_str) || !nzchar(html_str)) return("")
+  if (!grepl("<[^>]+>", html_str)) return(html_str)
+
+  doc <- tryCatch(read_html(html_str), error = function(e) NULL)
+  if (is.null(doc)) return("")
+  p_txt <- html_text2(html_elements(doc, "p"))
+  if (include_headers) {
+    h_txt <- html_text2(html_elements(doc, "title, h1, h2, h3, h4, h5, h6"))
+    paste(c(h_txt, p_txt), collapse = " ")
+  } else {
+    paste(p_txt, collapse = " ")
+  }
+}
+
+make_tfidf <- function(df_id_text, token = "words", top_terms = 15000) {
+  nm <- names(df_id_text)
+  if (!("id" %in% nm)) {
+    id_cand <- intersect(nm, c("id",".id","Id","ID","doc_id","url_id","page_id"))
+    if (length(id_cand) == 0) stop("make_tfidf(): couldn't find an 'id' column.")
+    df_id_text <- df_id_text %>% dplyr::rename(id = !!sym(id_cand[1]))
+  }
+  if (!("text" %in% nm)) {
+    txt_cand <- intersect(nm, c("text","txt","content","html","raw_html","text_html","text_tmp","raw"))
+    if (length(txt_cand) == 0) stop("make_tfidf(): couldn't find a 'text' column.")
+    df_id_text <- df_id_text %>% dplyr::rename(text = !!sym(txt_cand[1]))
+  }
+  df_id_text <- df_id_text %>% mutate(id = as.character(id), text = as.character(text))
+
+  tidy <- df_id_text %>%
+    mutate(text = replace_na(text, "")) %>%
+    select(id, text)
+
+  if (token == "words") {
+    tidy_tokens <- tidy %>%
+      unnest_tokens(word, text, token = "words", to_lower = TRUE) %>%
+      anti_join(stop_words, by = c("word" = "word")) %>%
+      filter(str_detect(word, "[a-z]"))
+  } else if (token == "bigrams") {
+    tidy_tokens <- tidy %>%
+      unnest_tokens(bigram, text, token = "ngrams", n = 2, to_lower = TRUE) %>%
+      tidyr::separate(bigram, into = c("w1","w2"), sep = " ", fill = "right") %>%
+      filter(!is.na(w1) & !is.na(w2)) %>%
+      filter(!w1 %in% stop_words$word, !w2 %in% stop_words$word) %>%
+      tidyr::unite("word", w1, w2, sep = "_")
+  } else stop("token must be 'words' or 'bigrams'")
+
+  counts <- tidy_tokens %>% count(id, word, sort = TRUE, name = "n")
+
+  term_freq <- counts %>%
+    group_by(word) %>% summarise(freq = sum(n), .groups = "drop") %>%
+    arrange(desc(freq))
+  top_limit <- min(top_terms, nrow(term_freq))
+  top_vocab <- term_freq %>% slice_head(n = top_limit) %>% pull(word)
+
+
+  counts <- counts %>% filter(word %in% top_vocab)
+
+  tfidf_tbl <- counts %>% bind_tf_idf(word, id, n) %>% select(id, word, tf_idf)
+
+  ids <- unique(df_id_text$id)
+  terms <- sort(unique(tfidf_tbl$word))
+  if (length(terms) == 0) stop("No terms after tokenization. Check your input/text.")
+  id_index <- tibble(id = ids, i = seq_along(ids))
+  term_index <- tibble(word = terms, j = seq_along(terms))
+  joined <- tfidf_tbl %>% inner_join(id_index, by = "id") %>% inner_join(term_index, by = "word")
+
+  m <- sparseMatrix(i = joined$i, j = joined$j, x = joined$tf_idf,
+                    dims = c(length(ids), length(terms)))
+  rownames(m) <- ids; colnames(m) <- terms
+  m
+}
+
+
+svd_doc_components <- function(X, k = 100) {
+  k <- min(k, min(dim(X)) - 1L); if (k < 2) k <- 2
+  sv <- irlba(X, nv = k)
+  as.matrix(sv$u %*% diag(sv$d))
+}
+
+
+cv_logistic_from_pcs <- function(PC, y, K = 5) {
+  n <- nrow(PC); folds <- sample(rep(1:K, length.out = n)); acc <- numeric(K)
+  for (k in 1:K) {
+    tr <- folds != k; te <- folds == k
+    mdl <- suppressWarnings(glm(y[tr] ~ ., family = binomial(),
+                                data = data.frame(PC[tr, , drop = FALSE])))
+    pr <- predict(mdl, newdata = data.frame(PC[te, , drop = FALSE]), type = "response")
+    acc[k] <- mean(ifelse(pr >= 0.5, 1, 0) == y[te])
+  }
+  mean(acc)
+}
+
+
+stack_bigram_stage <- function(word_PC, y, bigram_PC, K = 5) {
+  n <- nrow(word_PC); folds <- sample(rep(1:K, length.out = n))
+  oof_logodds <- rep(NA_real_, n)
+  for (k in 1:K) {
+    tr <- folds != k; te <- folds == k
+    mdl1 <- suppressWarnings(glm(y[tr] ~ ., family = binomial(),
+                                 data = data.frame(word_PC[tr, , drop = FALSE])))
+    oof_logodds[te] <- predict(mdl1, newdata = data.frame(word_PC[te, , drop = FALSE]), type = "link")
+  }
+  stage2 <- data.frame(y = y, logodds = oof_logodds, bigram_PC)
+  stage2$logodds[is.infinite(stage2$logodds)] <- 0
+
+  acc <- numeric(K)
+  for (k in 1:K) {
+    tr <- folds != k; te <- folds == k
+    mdl2 <- suppressWarnings(glm(y ~ ., family = binomial(), data = stage2[tr, ]))
+    pr <- predict(mdl2, newdata = stage2[te, ], type = "response")
+    acc[k] <- mean(ifelse(pr >= 0.5, 1, 0) == y[te])
+  }
+  mean(acc)
+}
+
+
+paths_try <- c("data/claims-raw.RData", "~/Desktop/claims-raw.RData")
+path <- paths_try[file.exists(paths_try)][1]
+if (is.na(path)) stop("claims-raw.RData not found in data/ or Desktop")
+
+objs <- load(path)
+cand <- objs[sapply(objs, function(x) is.data.frame(get(x)))]
+if (length(cand) == 0) stop("No data.frame found in the RData file.")
+claims_raw <- get(cand[1])
+
+# Map columns (common variant: .id, text_tmp, bclass)
+nm <- names(claims_raw)
+if (all(c(".id","text_tmp","bclass") %in% nm)) {
+  claims_raw <- claims_raw %>%
+    dplyr::rename(id = `.id`, html = text_tmp)
+} else {
+  id_col     <- intersect(nm, c("id",".id","neo_search_subject_id","neo_search_transaction_id",
+                                "url_id","page_id","url","URL","original_url"))
+  html_col   <- intersect(nm, c("html","raw_html","page_html","content","text_html",
+                                "text_tmp","text","raw"))
+  bclass_col <- intersect(nm, c("bclass","label","class","y","binary","target"))
+  if (length(id_col)==0 || length(html_col)==0 || length(bclass_col)==0)
+    stop("Couldn't find id/html/bclass columns. Names present: ", paste(nm, collapse=", "))
+  claims_raw <- claims_raw %>%
+    dplyr::rename(id = !!sym(id_col[1]), html = !!sym(html_col[1]), bclass = !!sym(bclass_col[1]))
+}
+claims_raw <- claims_raw %>% mutate(id = as.character(id))
+
+stopifnot(all(c("id","html","bclass") %in% names(claims_raw)))
+
+b_chr <- tolower(as.character(claims_raw$bclass))
+u <- sort(unique(b_chr))
+if (length(u) != 2) stop("bclass must have exactly 2 classes; found: ", paste(u, collapse=", "))
+if (all(c("claim","no-claim") %in% u)) {
+  claims_raw$bclass <- as.integer(b_chr == "claim")
+} else {
+  claims_raw$bclass <- as.integer(b_chr == u[2])   # map first level->0, second->1
+}
+stopifnot(all(claims_raw$bclass %in% c(0,1)))
+
+
+message("Extracting text… (paragraphs-only vs headers+paragraphs)")
+txt_p_only <- tibble(
+  id   = claims_raw$id,
+  text = vapply(claims_raw$html, extract_text, FUN.VALUE = character(1), include_headers = FALSE)
+)
+txt_with_hdr <- tibble(
+  id   = claims_raw$id,
+  text = vapply(claims_raw$html, extract_text, FUN.VALUE = character(1), include_headers = TRUE)
+)
+
+y <- as.integer(claims_raw$bclass)
+
+message("Task 1: Making word tf-idf matrices…")
+X_words_p <- make_tfidf(txt_p_only,  token = "words",   top_terms = 15000)
+X_words_h <- make_tfidf(txt_with_hdr, token = "words",   top_terms = 15000)
+
+message("Computing truncated SVD (document PCs)…")
+PC_p <- svd_doc_components(X_words_p, k = 100)
+PC_h <- svd_doc_components(X_words_h, k = 100)
+
+acc_p <- cv_logistic_from_pcs(PC_p, y, K = 5)
+acc_h <- cv_logistic_from_pcs(PC_h, y, K = 5)
+
+
+message("Task 2: Building bigram tf-idf…")
+X_bi_h <- make_tfidf(txt_with_hdr, token = "bigrams", top_terms = 15000)
+PC_bi  <- svd_doc_components(X_bi_h, k = 100)
+
+acc_stack <- stack_bigram_stage(PC_h, y, PC_bi, K = 5)
+
+
+res <- tibble(
+  setting = c("Task1: paragraphs-only (words)",
+              "Task1: headers+paragraphs (words)",
+              "Task2: stack(word log-odds + bigram PCs)"),
+  cv_accuracy = round(c(acc_p, acc_h, acc_stack), 4)
+)
+
+dir.create("results", showWarnings = FALSE, recursive = TRUE)
+readr::write_csv(res, "results/prelim_accuracy.csv")
+
+print(res)
+message("\nInterpretation:\n",
+        "- If headers+paragraphs > paragraphs-only, headers helped Task 1.\n",
+        "- If stack > headers+paragraphs, bigrams added extra information in Task 2.")
+
+
+```
+
