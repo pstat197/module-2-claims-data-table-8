@@ -1,5 +1,5 @@
 # This script is meant to train and create a transformer model for classification. It uses Keras. 
-# The R data file was converted to CSV locally. It was used here and will also be uploaded to the git with this script. 
+# The R data file was converted to CSV locally. It was used here and will also be uploaded to the git with this script* (Edit: Nvm, forgot the CSV is too large oops. It's just claims clean but CSV). 
 # -Ben 
 
 
