@@ -21,7 +21,6 @@ suppressPackageStartupMessages({
 
 set.seed(123)
 
-
 extract_text <- function(html_str, include_headers = TRUE) {
   if (is.na(html_str) || !nzchar(html_str)) return("")
   if (!grepl("<[^>]+>", html_str)) return(html_str)
@@ -139,8 +138,9 @@ stack_bigram_stage <- function(word_PC, y, bigram_PC, K = 5) {
 }
 
 
-paths_try <- c("data/claims-raw.RData", "~/Desktop/claims-raw.RData")
+paths_try <- c("../data/claims-raw.RData", "~/Desktop/claims-raw.RData")
 path <- paths_try[file.exists(paths_try)][1]
+path <- paths_try[1]
 if (is.na(path)) stop("claims-raw.RData not found in data/ or Desktop")
 
 objs <- load(path)
@@ -207,7 +207,7 @@ message("Task 2: Building bigram tf-idf…")
 X_bi_h <- make_tfidf(txt_with_hdr, token = "bigrams", top_terms = 15000)
 PC_bi  <- svd_doc_components(X_bi_h, k = 100)
 
-acc_stack <- stack_bigram_stage(PC_h, y, PC_bi, K = 5)
+acc_stack <- stack_bigram_stage(PC_p, y, PC_bi, K = 5)
 
 
 res <- tibble(
