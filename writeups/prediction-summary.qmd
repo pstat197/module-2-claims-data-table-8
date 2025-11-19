@@ -1,37 +1,57 @@
 ---
 title: "Predictive modeling of claims status"
-author: 'YOUR NAMES HERE'
+author: 'Cathy Fang, Anna Liang'
 date: today
 ---
 
 ### Abstract
 
-Provide a 3-5 sentence summary of your work on the primary task. Indicate what input data was used, what method was used for binary class predictions, what method was used for multiclass predictions, and what estimated accuracies were achieved.
-
-> *Header and paragraph content was scraped from the raw webpages and processed into term frequencies of word tokens. For binary classification, a two-layer neural network yielded an estimated 81.4% accuracy; for multiclass classification, a support vector machine gave 78% accuracy.*
+For the primary task, we used labeled webpages from claims-raw.RData, cleaned the HTML into plain text, and converted the text into unigram and bigram TF–IDF features after removing rare terms. For the binary classification model, we fit a regularized logistic regression (glmnet) on these TF–IDF features, pruning tokens occurring fewer than 5 times, and achieved an accuracy of 94.6% under 5-fold cross-validation. For the multiclass classification of claims status, we used a penalized multinomial logistic regression model (glmnet) trained on TF–IDF features constructed from unigram and bigram tokens. This model achieved an estimated overall multiclass accuracy of about 94.95% under 5-fold cross-validation
 
 ### Preprocessing
 
-In one paragraph lay out your preprocessing pipeline. No need to provide exact step-by-step detail; just give an overview of the main components:
-
--   what text content was extracted from HTML
-
--   how text was cleaned
-
--   how cleaned text was represented quantitatively
+For the primary task, we started from the HTML pages in the claims-raw dataset and extracted the visible paragraph content from each webpage. We discarded HTML tags and removed all variables including URLs, email addresses, punctuation, digits and symbols. Next, we splited apart camelCase text to convert all characters to lowercase and collapse repeated whitespace. Thus, each document was represented as a single cleaned text string. We then transformed these cleaned texts into a quantitative representation using TF–IDF weighting. We built a document–term matrix including both unigrams and bigrams with the text2vec framework. The final high-dimensional and sparse TF–IDF feature matrix served as the input for both our binary and multiclass predictive models.
 
 ### Methods
 
-Describe your final predictive models. Include one paragraph with details on the binary classification approach, and one on the multiclass approach. Include for each:
+For the binary classification task, we aimed to classify a webpage as “Relevant claim content” or "N/A: No relevant content". We used a regularized logistic regression model fit with the glmnet package. The input to this model was a high-dimensional sparse TF-IDF document-term matrix built from cleaned HTML text, including both unigram and bigram tokens after pruning rare terms that appeared fewer than five times. We specified a binomial logistic model and tuned the regularization strength $\lambda$ using 5-fold cross-validation. The final binary model was then trained on the full training set at the optimal $\lambda$ and applied to the test set to generate a binary classification for each webpage.
 
--   what ML/statistical method was used
-
--   model specification and hyperparameter selection
-
--   training method
+For the multiclass setting, we modeled the claims status as a multi-category outcome. This outcome used penalized multinomial logistic regression fit with the glmnet package. The input to this model was the TF–IDF feature matrix constructed from unigram and bigram tokens. We used the multinomial family in glmnet to handle the large number of text features. Then, we selected the regularization parameter $\lambda$ via 5-fold cross-validation, and chose the value of $\lambda$ that minimized the multiclass misclassification error. The model was then refitted on the full training set using this optimal $\lambda$. We did not add any additional predictors beyond the text-derived TF–IDF scores, so the model’s decisions were driven entirely by patterns in word and phrase usage across the different claims-status categories.
 
 ### Results
 
-Indicate the predictive accuracy of the binary classifications and the multiclass classifications. Provide a table for each, and report sensitivity, specificity, and accuracy.[^1]
+For the binary classification model, the performance metrics show that the classifier is doing a strong job distinguishing “Relevant claim content” from “N/A: No relevant content.” The overall accuracy of 0.946 means that about 94.6% of webpages in the training data were correctly classified. The sensitivity of 0.936 indicates that, among pages that truly contain relevant claim content, the model correctly identifies roughly 93.6% of them. The specificity of 0.957 indicates that, among pages with no relevant claim content, approximately 95.7% are correctly identified as non-claims, with only a small fraction incorrectly flagged as claims. These metrics were obtained after tuning the regularization parameter via 5-fold cross-validation in the glmnet-based logistic regression model. Overall, the model achieved high performance in both detecting relevant claims and avoiding false positives, making it a solid choice for binary classification.
 
-[^1]: Read [this article](https://yardstick.tidymodels.org/articles/multiclass.html) on multiclass averaging.
+```{r, echo=FALSE}
+library(tibble)
+library(knitr)
+
+values <- tibble(
+  Accuracy            = 0.946,
+  Sensitivity         = 0.936,
+  Specificity         = 0.957 
+)
+
+kable(
+  values,
+  caption = "Binary classification performance",
+  digits  = 3
+)
+
+```
+
+For the multiclass classification task, the penalized multinomial logistic regression achieved an estimated overall accuracy of approximately 94.95% based on 5-fold cross-validation on the training data. When averaging across classes, the model obtained an averaged sensitivity of 92.6% and an averaged specificity of 98.3%. It indicated that it correctly identified most pages in each claims-status category and rarely misclassified pages belonging to a class they do not belong to. Performance was reasonably consistent across the different claims-status categories: classes with more training examples tended to show higher sensitivity, while minority classes exhibited somewhat lower sensitivity but comparable specificity. Overall, the model was able to distinguish between the main types of webpages in the dataset with high reliability. It captured the key textual cues associated with each claims-status label and at the same time maintained the balanced performance across categories.
+
+```{r, echo=FALSE}
+metrics_row <- tibble(
+  Accuracy            = 0.950,
+  Sensitivity         = 0.926,
+  Specificity         = 0.983
+)
+
+kable(
+  metrics_row,
+  caption = "Overall multiclass performance (5-fold cross-validation).",
+  digits  = 3
+)
+```

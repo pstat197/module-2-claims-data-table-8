@@ -155,14 +155,14 @@ model_bundle <- list(
 )
 
 # Save model and vectorizers
-save(model_bundle, file = here("results/binaryclass_results/bclass_primary_model.RData"))
+save(model_bundle, file = here("results/bclass_primary_model.RData"))
 ```
 
 #Applying this model to the test set
 
 ```{r}
 # Load trained model
-load(here("results/binaryclass_results/bclass_primary_model.RData"))
+load(here("results/bclass_primary_model.RData"))
 ```
 
 
@@ -228,7 +228,38 @@ if (!dir.exists(here("results"))) dir.create(here("results"), recursive = TRUE)
 save(pred_df_binary, file = here("results/binaryclass_results/predictions.RData"))
 
 head(pred_df_binary)
-
 ```
 
+
+Sensitivity, Specificity, and Accuracy.
+```{r}
+# Make sure both are plain 0/1 numeric
+truth <- as.numeric(y_train_bi)          # should already be 0/1
+pred  <- as.numeric(pred_glmnet)         # should be 0/1 from glmnet
+
+# Confusion matrix (0 = N/A, 1 = Relevant)
+cm <- table(
+  truth = factor(truth, levels = c(0, 1)),
+  pred  = factor(pred,  levels = c(0, 1))
+)
+cm
+
+# Extract cells
+TN <- cm["0", "0"]  # true negatives  (N/A predicted N/A)
+FP <- cm["0", "1"]  # false positives (N/A predicted Relevant)
+FN <- cm["1", "0"]  # false negatives (Relevant predicted N/A)
+TP <- cm["1", "1"]  # true positives  (Relevant predicted Relevant)
+
+# Metrics
+accuracy_cm  <- (TP + TN) / sum(cm)
+sensitivity  <- TP / (TP + FN)   # recall, TPR for "Relevant claim content"
+specificity  <- TN / (TN + FP)   # TNR for "N/A: No relevant content."
+
+cat("Accuracy from confusion matrix:", round(accuracy_cm, 3), "\n")
+cat("Sensitivity (TPR):", round(sensitivity, 3), "\n")
+cat("Specificity (TNR):", round(specificity, 3), "\n")
+
+cat("Accuracy from mean():", round(acc_glmnet, 3), "\n")
+cat("Accuracy from CM   :", round(accuracy_cm, 3), "\n")
+```
 
