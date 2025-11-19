@@ -1,0 +1,27 @@
+---
+title: "Primary Task Combined"
+author: "Anna Liang, Cathy Fang"
+date: "2025-11-19"
+output: pdf_document
+---
+
+This file joins the binary and multiclass dataframes together into one dataframe
+```{r}
+library(tidyverse)
+library(here)
+
+# Load binary and multiclass predictions
+
+load(here("results/binaryclass_results/predictions.RData"))
+
+load(here("results/mclass_results/preds-groupN.RData"))
+
+
+# Join by .id to create final prediction dataframe with both binary and multiclass
+pred_df <- pred_df_binary %>%
+  inner_join(pred_df, by = ".id")
+
+# Save final combined predictions
+save(pred_df, file = here("results", "preds-group8.RData"))
+```
+
